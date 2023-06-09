@@ -1171,7 +1171,7 @@ def csrmask(gidxA, A_weights, gidxB):
 
 
 def segment_mm(A, B, seglen_A):
-    if A.device.type == "cpu":
+    if A.device.type == "cpu" and A.dtype == th.bfloat16:
         C = []
         off = 0
         for i in range(B.shape[0]):

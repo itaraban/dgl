@@ -8,9 +8,9 @@
 
 #include <dgl/array.h>
 #include <dgl/bcast.h>
+#include <libxsmm.h>
 
 #include <utility>
-
 namespace dgl {
 namespace aten {
 namespace cpu {
@@ -105,6 +105,102 @@ void gatherMM_SortedEtype(
     A_offset += m * k;
     B_offset += k * n;
     C_offset += m * n;
+  }
+}
+
+template <typename DType>
+void MMLibxsmm(
+    char transA, char transB, int64_t m, int64_t n, int64_t k, DType alpha,
+    const DType *A, int64_t lda, const DType *B, int64_t ldb, DType beta,
+    DType *C, int64_t ldc) {
+  const int flags_trans = LIBXSMM_GEMM_FLAGS(transA, transB);
+  const int flags_ab = (LIBXSMM_NEQ(0, beta) ? 0 : LIBXSMM_GEMM_FLAG_BETA_0);
+  libxsmm_datatype datatype = LIBXSMM_DATATYPE_UNSUPPORTED;
+  if (std::is_same<DType, double>::value) datatype = LIBXSMM_DATATYPE_F64;
+  if (std::is_same<DType, float>::value) datatype = LIBXSMM_DATATYPE_F32;
+  if (std::is_same<DType, BFloat16>::value) datatype = LIBXSMM_DATATYPE_BF16;
+  const libxsmm_gemm_shape gemm_shape = libxsmm_create_gemm_shape(
+      m, n, k, lda, ldb, ldc, datatype, datatype, datatype, datatype);
+
+  const libxsmm_gemmfunction kernel = libxsmm_dispatch_gemm_v2(
+      gemm_shape, (libxsmm_bitfield)(flags_trans | flags_ab),
+      (libxsmm_bitfield)LIBXSMM_GEMM_PREFETCH_NONE);
+
+  assert(NULL != kernel);
+
+  libxsmm_gemm_param gemm_param;
+  gemm_param.c.primary = C;
+  gemm_param.a.primary = (DType *)(A);
+  gemm_param.b.primary = (DType *)(B);
+  kernel(&gemm_param);
+}
+
+template <typename IdType, typename DType>
+void SegmentMM(
+    const NDArray A, const NDArray B, NDArray C, const NDArray seglen_A,
+    bool a_trans, bool b_trans) {
+  const DType *A_data = A.Ptr<DType>();
+  const DType *B_data = B.Ptr<DType>();
+  const IdType *seglen_A_data = seglen_A.Ptr<IdType>();
+  DType *C_data = C.Ptr<DType>();
+  int64_t A_offset = 0, B_offset = 0, C_offset = 0;
+  int64_t m, n, k;
+  int64_t num_rel = seglen_A.NumElements();
+  DType alpha = 1., beta = 0.;
+
+  n = B->shape[2];
+  k = B->shape[1];
+  int ldb = n, lda = k, ldc = n;
+
+  char transB = 'n';
+  char transA = 'n';
+  if (b_trans) {
+    transB = 't';
+    ldb = n, lda = n, ldc = k;
+    std::swap(n, k);
+  }
+
+  for (IdType etype = 0; etype < num_rel; ++etype) {
+    m = seglen_A_data[etype];
+    MMLibxsmm(
+        transB, transA, n, m, k, alpha, B_data + B_offset, ldb,
+        A_data + A_offset, lda, beta, C_data + C_offset, ldc);
+
+    A_offset += m * k;
+    B_offset += k * n;
+    C_offset += m * n;
+  }
+}
+
+template <typename IdType, typename DType>
+void SegmentMMBackwardB(
+    const NDArray A, const NDArray dC, NDArray dB, const NDArray seglen) {
+  const DType *A_data = A.Ptr<DType>();
+  const DType *dC_data = dC.Ptr<DType>();
+  const IdType *seglen_data = seglen.Ptr<IdType>();
+  DType *dB_data = dB.Ptr<DType>();
+  int64_t A_offset = 0, dC_offset = 0, dB_offset = 0;
+  int64_t m, n, k;
+  int64_t num_rel = seglen.NumElements();
+  DType alpha = 1., beta = 0.;
+
+  m = dC->shape[1];
+  n = A->shape[1];
+  int lddC = m, ldA = n, lddB = m;
+
+  char trans_dC = 'n';
+  char trans_A = 't';
+
+  for (IdType etype = 0; etype < num_rel; ++etype) {
+    k = seglen_data[etype];
+
+    MMLibxsmm(
+        trans_dC, trans_A, m, n, k, alpha, dC_data + dC_offset, lddC,
+        A_data + A_offset, ldA, beta, dB_data + dB_offset, lddB);
+
+    dC_offset += m * k;
+    A_offset += n * k;
+    dB_offset += m * n;
   }
 }
 

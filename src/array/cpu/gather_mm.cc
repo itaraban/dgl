@@ -15,13 +15,13 @@ template <int XPU, typename IdType, typename DType>
 void SegmentMM(
     const NDArray A, const NDArray B, NDArray C, const NDArray seglen_A,
     bool a_trans, bool b_trans) {
-  LOG(FATAL) << "Unsupported CPU kernel for SegmentMM.";
+  cpu::SegmentMM<IdType, DType>(A, B, C, seglen_A, a_trans, b_trans);
 }
 
 template <int XPU, typename IdType, typename DType>
 void SegmentMMBackwardB(
     const NDArray A, const NDArray dC, NDArray dB, const NDArray seglen) {
-  LOG(FATAL) << "Unsupported CPU kernel for SegmentMMBackwardB.";
+  cpu::SegmentMMBackwardB<IdType, DType>(A, dC, dB, seglen);
 }
 
 /** @brief Generalized GatherMM. */
