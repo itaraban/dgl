@@ -1,0 +1,7 @@
+torch
+torchvision
+transformers
+openvino
+nncf
+intel_extension_for_pytorch
+optimum-intel
